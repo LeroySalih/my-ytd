@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { mkdtemp, readFile, rm } from 'fs/promises';
+import { access, mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -82,7 +82,7 @@ async function fetchTitle(originalUrl) {
   return data.title;
 }
 
-function runYtDlp(videoId, outputPath) {
+function runYtDlp(videoId, outputPath, cookiesPath) {
   return new Promise((resolve, reject) => {
     console.log(`[yt-dlp] starting download for ${videoId}`);
     const args = [
@@ -94,14 +94,9 @@ function runYtDlp(videoId, outputPath) {
       '-o', outputPath,
     ];
 
-    // Use cookies file if available (required on servers where YouTube bot-checks)
-    const cookiesPath = process.env.COOKIES_FILE ?? '/app/cookies.txt';
-    try {
-      await import('fs/promises').then(fs => fs.access(cookiesPath));
+    if (cookiesPath) {
       args.push('--cookies', cookiesPath);
       console.log(`[yt-dlp] using cookies from ${cookiesPath}`);
-    } catch {
-      // No cookies file — proceed without (works locally, may fail on servers)
     }
 
     args.push(`https://www.youtube.com/watch?v=${videoId}`);
@@ -131,8 +126,18 @@ async function fetchTranscriptText(videoId) {
   const outputPath = join(tmpDir, 'transcript');
   const vttPath = `${outputPath}.en.vtt`;
 
+  // Use cookies file if available (required on servers where YouTube bot-checks)
+  const cookiesPath = process.env.COOKIES_FILE ?? '/app/cookies.txt';
+  let resolvedCookies = null;
   try {
-    await runYtDlp(videoId, outputPath);
+    await access(cookiesPath);
+    resolvedCookies = cookiesPath;
+  } catch {
+    // No cookies file — proceed without
+  }
+
+  try {
+    await runYtDlp(videoId, outputPath, resolvedCookies);
     const vttContent = await readFile(vttPath, 'utf8');
     console.log(`[transcript] parsed VTT for ${videoId}`);
     return parseVtt(vttContent);
