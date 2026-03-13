@@ -69,13 +69,20 @@ function mapLibraryError(err) {
   return new TranscriptError(err.message || 'Unexpected error', 'UNKNOWN');
 }
 
+/**
+ * @param {string} videoId - Validated 11-character YouTube video ID
+ * @param {string} originalUrl - Original URL (used for markdown metadata only)
+ * @returns {Promise<{ videoId: string, title: string, markdown: string }>}
+ * @throws {TranscriptError} with code: NOT_FOUND | UNAVAILABLE | RATE_LIMITED | TIMEOUT | UNKNOWN
+ */
 export async function fetchTranscript(videoId, originalUrl) {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(
+  let timerId;
+  const timeout = new Promise((_, reject) => {
+    timerId = setTimeout(
       () => reject(new TranscriptError('Transcript fetch timed out', 'TIMEOUT')),
       TIMEOUT_MS
-    )
-  );
+    );
+  });
 
   const work = async () => {
     const [titleResult, segmentsResult] = await Promise.allSettled([
@@ -104,5 +111,7 @@ export async function fetchTranscript(videoId, originalUrl) {
   } catch (err) {
     if (err instanceof TranscriptError) throw err;
     throw mapLibraryError(err);
+  } finally {
+    clearTimeout(timerId);
   }
 }
