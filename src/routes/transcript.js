@@ -2,12 +2,12 @@ import { fetchTranscript, TranscriptError } from '../transcript.js';
 
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
-const ERROR_STATUS = {
-  NOT_FOUND: 404,
-  UNAVAILABLE: 422,
-  RATE_LIMITED: 503,
-  TIMEOUT: 408,
-  UNKNOWN: 500,
+const ERROR_RESPONSE = {
+  NOT_FOUND:    { status: 404, text: 'Not Found' },
+  UNAVAILABLE:  { status: 422, text: 'Unprocessable Entity' },
+  RATE_LIMITED: { status: 503, text: 'Service Unavailable' },
+  TIMEOUT:      { status: 408, text: 'Request Timeout' },
+  UNKNOWN:      { status: 500, text: 'Internal Server Error' },
 };
 
 function extractVideoId(url) {
@@ -65,10 +65,10 @@ export default async function transcriptRoutes(fastify) {
       result = await fetchTranscript(videoId, url);
     } catch (err) {
       if (err instanceof TranscriptError) {
-        const status = ERROR_STATUS[err.code] ?? 500;
-        return reply.code(status).send({
-          statusCode: status,
-          error: statusText(status),
+        const response = ERROR_RESPONSE[err.code] ?? { status: 500, text: 'Internal Server Error' };
+        return reply.code(response.status).send({
+          statusCode: response.status,
+          error: response.text,
           message: err.message,
         });
       }
@@ -83,19 +83,7 @@ export default async function transcriptRoutes(fastify) {
     reply
       .code(200)
       .header('Content-Type', 'text/markdown')
-      .header('Content-Disposition', `attachment; filename="${result.videoId}.md"`)
+      .header('Content-Disposition', `attachment; filename="${videoId}.md"`)
       .send(result.markdown);
   });
-}
-
-function statusText(code) {
-  const map = {
-    400: 'Bad Request',
-    404: 'Not Found',
-    408: 'Request Timeout',
-    422: 'Unprocessable Entity',
-    500: 'Internal Server Error',
-    503: 'Service Unavailable',
-  };
-  return map[code] ?? 'Error';
 }
