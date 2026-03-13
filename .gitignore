@@ -1,6 +1,8 @@
 # Dependency directories
 node_modules/
 jspm_packages/
+.npm-cache/
+node_modules/
 
 # Internal npm generated paths
 .npm
