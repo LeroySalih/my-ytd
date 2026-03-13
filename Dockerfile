@@ -6,7 +6,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 
 # Install yt-dlp and production dependencies
-RUN apk add --no-cache yt-dlp && npm ci --omit=dev
+RUN apk add --no-cache python3 curl && \
+    curl -sL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp && \
+    chmod +x /usr/local/bin/yt-dlp && \
+    npm ci --omit=dev
 
 # Copy application source
 COPY src/ ./src/
