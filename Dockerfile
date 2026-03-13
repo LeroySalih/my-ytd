@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy dependency manifests first for better layer caching
 COPY package.json package-lock.json ./
 
-# Install production dependencies only
-RUN npm ci --omit=dev
+# Install yt-dlp and production dependencies
+RUN apk add --no-cache yt-dlp && npm ci --omit=dev
 
 # Copy application source
 COPY src/ ./src/
