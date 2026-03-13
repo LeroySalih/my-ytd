@@ -84,6 +84,7 @@ async function fetchTitle(originalUrl) {
 
 function runYtDlp(videoId, outputPath) {
   return new Promise((resolve, reject) => {
+    console.log(`[yt-dlp] starting download for ${videoId}`);
     const proc = spawn('yt-dlp', [
       '--write-auto-sub',
       '--sub-lang', 'en',
@@ -95,10 +96,12 @@ function runYtDlp(videoId, outputPath) {
     ]);
 
     let stderr = '';
+    proc.stdout.on('data', (d) => { process.stdout.write(`[yt-dlp] ${d}`); });
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
 
     proc.on('close', (code) => {
       if (code === 0) {
+        console.log(`[yt-dlp] finished for ${videoId}`);
         resolve();
       } else {
         reject(new Error(`yt-dlp exited ${code}: ${stderr.slice(0, 300)}`));
@@ -119,6 +122,7 @@ async function fetchTranscriptText(videoId) {
   try {
     await runYtDlp(videoId, outputPath);
     const vttContent = await readFile(vttPath, 'utf8');
+    console.log(`[transcript] parsed VTT for ${videoId}`);
     return parseVtt(vttContent);
   } catch (err) {
     const msg = err.message ?? '';
