@@ -63,7 +63,7 @@ function mapLibraryError(err) {
   if (err instanceof YoutubeTranscriptNotAvailableError)
     return new TranscriptError('No transcript available for this video', 'NOT_FOUND');
   if (err instanceof YoutubeTranscriptTooManyRequestError)
-    return new TranscriptError('YouTube is currently unavailable', 'RATE_LIMITED');
+    return new TranscriptError('YouTube is currently unavailable. Try again later.', 'RATE_LIMITED');
   if (err instanceof YoutubeTranscriptNotAvailableLanguageError)
     return new TranscriptError('No transcript in requested language', 'NOT_FOUND');
   return new TranscriptError(err.message || 'Unexpected error', 'UNKNOWN');
