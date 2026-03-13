@@ -1,11 +1,7 @@
-import {
-  YoutubeTranscript,
-  YoutubeTranscriptVideoUnavailableError,
-  YoutubeTranscriptDisabledError,
-  YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptTooManyRequestError,
-  YoutubeTranscriptNotAvailableLanguageError,
-} from 'youtube-transcript';
+import { spawn } from 'child_process';
+import { mkdtemp, readFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 const TIMEOUT_MS = 10_000;
 
@@ -26,7 +22,38 @@ function decodeEntities(text) {
     .replace(/&gt;/g, '>');
 }
 
-function formatMarkdown(videoId, originalUrl, title, segments) {
+function parseVtt(vttContent) {
+  // Strip inline timing cues like <00:00:19.039><c> and </c>
+  const stripped = vttContent.replace(/<[^>]+>/g, '');
+
+  const lines = stripped.split('\n');
+  const texts = [];
+  let prev = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip WEBVTT header, Kind/Language metadata, timestamp lines, and blanks
+    if (
+      !trimmed ||
+      trimmed.startsWith('WEBVTT') ||
+      trimmed.startsWith('Kind:') ||
+      trimmed.startsWith('Language:') ||
+      /^\d{2}:\d{2}:\d{2}/.test(trimmed) ||  // timestamp line
+      /^\d+$/.test(trimmed)                    // cue number
+    ) {
+      continue;
+    }
+    // Deduplicate consecutive identical lines (yt-dlp shows rolling captions)
+    if (trimmed !== prev) {
+      texts.push(trimmed);
+      prev = trimmed;
+    }
+  }
+
+  return texts;
+}
+
+function formatMarkdown(videoId, originalUrl, title, texts) {
   const header = [
     `# ${title}`,
     '',
@@ -39,9 +66,9 @@ function formatMarkdown(videoId, originalUrl, title, segments) {
   ].join('\n');
 
   const paragraphs = [];
-  for (let i = 0; i < segments.length; i += 10) {
-    const chunk = segments.slice(i, i + 10);
-    paragraphs.push(chunk.map((s) => decodeEntities(s.text)).join(' '));
+  for (let i = 0; i < texts.length; i += 10) {
+    const chunk = texts.slice(i, i + 10);
+    paragraphs.push(chunk.map(decodeEntities).join(' '));
   }
 
   return header + paragraphs.join('\n\n');
@@ -55,18 +82,60 @@ async function fetchTitle(originalUrl) {
   return data.title;
 }
 
-function mapLibraryError(err) {
-  if (err instanceof YoutubeTranscriptVideoUnavailableError)
-    return new TranscriptError('Video is unavailable', 'UNAVAILABLE');
-  if (err instanceof YoutubeTranscriptDisabledError)
-    return new TranscriptError('Transcripts are disabled for this video', 'NOT_FOUND');
-  if (err instanceof YoutubeTranscriptNotAvailableError)
-    return new TranscriptError('No transcript available for this video', 'NOT_FOUND');
-  if (err instanceof YoutubeTranscriptTooManyRequestError)
-    return new TranscriptError('YouTube is currently unavailable. Try again later.', 'RATE_LIMITED');
-  if (err instanceof YoutubeTranscriptNotAvailableLanguageError)
-    return new TranscriptError('No transcript in requested language', 'NOT_FOUND');
-  return new TranscriptError(err.message || 'Unexpected error', 'UNKNOWN');
+function runYtDlp(videoId, outputPath) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('yt-dlp', [
+      '--write-auto-sub',
+      '--sub-lang', 'en',
+      '--skip-download',
+      '--sub-format', 'vtt',
+      '--no-warnings',
+      '-o', outputPath,
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ]);
+
+    let stderr = '';
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`yt-dlp exited ${code}: ${stderr.slice(0, 300)}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(new Error(`yt-dlp not found: ${err.message}`));
+    });
+  });
+}
+
+async function fetchTranscriptText(videoId) {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'ytd-'));
+  const outputPath = join(tmpDir, 'transcript');
+  const vttPath = `${outputPath}.en.vtt`;
+
+  try {
+    await runYtDlp(videoId, outputPath);
+    const vttContent = await readFile(vttPath, 'utf8');
+    return parseVtt(vttContent);
+  } catch (err) {
+    const msg = err.message ?? '';
+    if (msg.includes('Video unavailable') || msg.includes('not available')) {
+      throw new TranscriptError('Video is unavailable', 'UNAVAILABLE');
+    }
+    if (msg.includes('no subtitles') || msg.includes('no captions')) {
+      throw new TranscriptError('No transcript available for this video', 'NOT_FOUND');
+    }
+    // If the vtt file wasn't created, no subtitles were available
+    if (msg.includes('ENOENT')) {
+      throw new TranscriptError('No transcript available for this video', 'NOT_FOUND');
+    }
+    throw err;
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -85,9 +154,9 @@ export async function fetchTranscript(videoId, originalUrl) {
   });
 
   const work = async () => {
-    const [titleResult, segmentsResult] = await Promise.allSettled([
+    const [titleResult, textsResult] = await Promise.allSettled([
       fetchTitle(originalUrl),
-      YoutubeTranscript.fetchTranscript(videoId),
+      fetchTranscriptText(videoId),
     ]);
 
     let title;
@@ -98,11 +167,11 @@ export async function fetchTranscript(videoId, originalUrl) {
       title = videoId;
     }
 
-    if (segmentsResult.status === 'rejected') {
-      throw segmentsResult.reason;
+    if (textsResult.status === 'rejected') {
+      throw textsResult.reason;
     }
 
-    const markdown = formatMarkdown(videoId, originalUrl, title, segmentsResult.value);
+    const markdown = formatMarkdown(videoId, originalUrl, title, textsResult.value);
     return { videoId, title, markdown };
   };
 
@@ -110,7 +179,7 @@ export async function fetchTranscript(videoId, originalUrl) {
     return await Promise.race([work(), timeout]);
   } catch (err) {
     if (err instanceof TranscriptError) throw err;
-    throw mapLibraryError(err);
+    throw new TranscriptError(err.message || 'Unexpected error', 'UNKNOWN');
   } finally {
     clearTimeout(timerId);
   }
